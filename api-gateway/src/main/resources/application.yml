@@ -1,0 +1,151 @@
+server:
+  port: 8080
+  netty:
+    max-initial-line-length: 65536
+
+spring:
+  application:
+    name: api-gateway
+  codec:
+    max-in-memory-size: 64MB
+  cloud:
+    gateway:
+      httpclient:
+        connect-timeout: 10000
+        response-timeout: 120s
+        pool:
+          max-idle-time: 30s
+      default-filters:
+        - DedupeResponseHeader=Access-Control-Allow-Credentials Access-Control-Allow-Origin
+      globalcors:
+        cors-configurations:
+          '[/**]':
+            allowedOrigins: "*"
+            allowedMethods:
+              - GET
+              - POST
+              - PUT
+              - DELETE
+              - OPTIONS
+            allowedHeaders: "*"
+            maxAge: 3600
+      routes:
+        # Auth Service
+        - id: auth-service
+          uri: ${AUTH_SERVICE_URL:http://localhost:8081}
+          predicates:
+            - Path=/api/v1/auth/**
+          filters:
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 10
+                redis-rate-limiter.burstCapacity: 20
+                key-resolver: "#{@ipKeyResolver}"
+
+        # Document Service
+        - id: document-service
+          uri: ${DOCUMENT_SERVICE_URL:http://localhost:8082}
+          predicates:
+            - Path=/api/v1/documents/**
+          filters:
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 5
+                redis-rate-limiter.burstCapacity: 10
+                key-resolver: "#{@ipKeyResolver}"
+
+        # Embedding Service
+        - id: embedding-service
+          uri: ${EMBEDDING_SERVICE_URL:http://localhost:8083}
+          predicates:
+            - Path=/api/v1/embeddings/**
+          filters:
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 20
+                redis-rate-limiter.burstCapacity: 40
+                key-resolver: "#{@ipKeyResolver}"
+
+        # RAG Query Service
+        - id: rag-query-service
+          uri: ${RAG_QUERY_SERVICE_URL:http://localhost:8084}
+          predicates:
+            - Path=/api/v1/query/**
+          filters:
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 10
+                redis-rate-limiter.burstCapacity: 20
+                key-resolver: "#{@ipKeyResolver}"
+
+        # Models endpoint (served by rag-query-service)
+        - id: models-service
+          uri: ${RAG_QUERY_SERVICE_URL:http://localhost:8084}
+          predicates:
+            - Path=/api/v1/models/**
+          filters:
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 20
+                redis-rate-limiter.burstCapacity: 40
+                key-resolver: "#{@ipKeyResolver}"
+
+        # AI Studio (served by rag-query-service)
+        - id: studio-service
+          uri: ${RAG_QUERY_SERVICE_URL:http://localhost:8084}
+          predicates:
+            - Path=/api/v1/studio/**
+          filters:
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 5
+                redis-rate-limiter.burstCapacity: 10
+                key-resolver: "#{@ipKeyResolver}"
+
+        # Billing Service
+        - id: billing-service
+          uri: ${BILLING_SERVICE_URL:http://localhost:8085}
+          predicates:
+            - Path=/api/v1/billing/**
+          filters:
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 5
+                redis-rate-limiter.burstCapacity: 10
+                key-resolver: "#{@ipKeyResolver}"
+
+        # Analytics Service
+        - id: analytics-service
+          uri: ${ANALYTICS_SERVICE_URL:http://localhost:8086}
+          predicates:
+            - Path=/api/v1/analytics/**
+          filters:
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: 10
+                redis-rate-limiter.burstCapacity: 20
+                key-resolver: "#{@ipKeyResolver}"
+
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus,gateway
+  endpoint:
+    gateway:
+      enabled: true
+  metrics:
+    tags:
+      application: api-gateway
+
+logging:
+  level:
+    org.springframework.cloud.gateway: INFO
+    com.ragllm: DEBUG
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"

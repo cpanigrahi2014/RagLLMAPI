@@ -1,0 +1,230 @@
+# ═══════════════════════════════════════════════════════════
+#  PRODUCTION Docker Compose — AWS EC2 Deployment
+#  Includes Nginx reverse proxy serving frontend + API
+#  Access via: http://<EC2-PUBLIC-IP>/
+# ═══════════════════════════════════════════════════════════
+
+services:
+  # ─── Nginx Reverse Proxy + Frontend ───────────────────
+  nginx:
+    build:
+      context: .
+      dockerfile: deploy/nginx/Dockerfile
+    container_name: ragllm-nginx
+    ports:
+      - "80:80"
+    depends_on:
+      - api-gateway
+    restart: unless-stopped
+    networks:
+      - ragllm-network
+
+  # ─── Infrastructure ───────────────────────────────────
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: ragllm-postgres
+    environment:
+      POSTGRES_DB: ragllm
+      POSTGRES_USER: ${DB_USERNAME:-ragllm}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-ragllm}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ragllm"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - ragllm-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: ragllm-redis
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - ragllm-network
+
+  # ─── Application Services ─────────────────────────────
+  api-gateway:
+    build: ./api-gateway
+    container_name: ragllm-gateway
+    environment:
+      REDIS_HOST: redis
+      AUTH_SERVICE_URL: http://auth-service:8081
+      DOCUMENT_SERVICE_URL: http://document-service:8082
+      EMBEDDING_SERVICE_URL: http://embedding-service:8083
+      RAG_QUERY_SERVICE_URL: http://rag-query-service:8084
+      BILLING_SERVICE_URL: http://billing-service:8085
+      ANALYTICS_SERVICE_URL: http://analytics-service:8086
+      JAVA_OPTS: "-Xmx256m -Xms128m"
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - ragllm-network
+
+  auth-service:
+    build: ./auth-service
+    container_name: ragllm-auth
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ragllm
+      DB_USERNAME: ${DB_USERNAME:-ragllm}
+      DB_PASSWORD: ${DB_PASSWORD:-ragllm}
+      REDIS_HOST: redis
+      JWT_SECRET: ${JWT_SECRET}
+      JAVA_OPTS: "-Xmx256m -Xms128m"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - ragllm-network
+
+  document-service:
+    build: ./document-service
+    container_name: ragllm-document
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ragllm
+      DB_USERNAME: ${DB_USERNAME:-ragllm}
+      DB_PASSWORD: ${DB_PASSWORD:-ragllm}
+      REDIS_HOST: redis
+      JWT_SECRET: ${JWT_SECRET}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      EMBEDDING_SERVICE_URL: http://embedding-service:8083
+      JAVA_OPTS: "-Xmx256m -Xms128m"
+    volumes:
+      - upload_data:/app/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - ragllm-network
+
+  embedding-service:
+    build: ./embedding-service
+    container_name: ragllm-embedding
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ragllm
+      DB_USERNAME: ${DB_USERNAME:-ragllm}
+      DB_PASSWORD: ${DB_PASSWORD:-ragllm}
+      REDIS_HOST: redis
+      JWT_SECRET: ${JWT_SECRET}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      JAVA_OPTS: "-Xmx256m -Xms128m"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - ragllm-network
+
+  rag-query-service:
+    build: ./rag-query-service
+    container_name: ragllm-query
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ragllm
+      DB_USERNAME: ${DB_USERNAME:-ragllm}
+      DB_PASSWORD: ${DB_PASSWORD:-ragllm}
+      REDIS_HOST: redis
+      JWT_SECRET: ${JWT_SECRET}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      JAVA_OPTS: "-Xmx384m -Xms192m"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - ragllm-network
+
+  billing-service:
+    build: ./billing-service
+    container_name: ragllm-billing
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ragllm
+      DB_USERNAME: ${DB_USERNAME:-ragllm}
+      DB_PASSWORD: ${DB_PASSWORD:-ragllm}
+      REDIS_HOST: redis
+      JWT_SECRET: ${JWT_SECRET}
+      JAVA_OPTS: "-Xmx192m -Xms96m"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - ragllm-network
+
+  analytics-service:
+    build: ./analytics-service
+    container_name: ragllm-analytics
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ragllm
+      DB_USERNAME: ${DB_USERNAME:-ragllm}
+      DB_PASSWORD: ${DB_PASSWORD:-ragllm}
+      REDIS_HOST: redis
+      JWT_SECRET: ${JWT_SECRET}
+      JAVA_OPTS: "-Xmx192m -Xms96m"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - ragllm-network
+
+  # ─── Monitoring ────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:v2.50.0
+    container_name: ragllm-prometheus
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    restart: unless-stopped
+    networks:
+      - ragllm-network
+
+volumes:
+  postgres_data:
+  redis_data:
+  upload_data:
+  prometheus_data:
+
+networks:
+  ragllm-network:
+    driver: bridge
